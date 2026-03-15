@@ -136,7 +136,7 @@ Based on this transcript generate:
 8. 7 Day Content Distribution Plan
 
 Transcript:
-{transcript[:12000]}
+{transcript[:4000]}
 """
 
         response = client.chat.completions.create(
