@@ -1,7 +1,13 @@
 import os
-import subprocess
+import re
 from flask import Flask, request, render_template_string
 from openai import OpenAI
+from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api._errors import (
+    TranscriptsDisabled,
+    NoTranscriptFound,
+    VideoUnavailable,
+)
 
 app = Flask(__name__)
 
@@ -9,215 +15,286 @@ client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 HTML = """
 <!DOCTYPE html>
-<html>
-
+<html lang="en">
 <head>
-
-<title>ContentForge AI</title>
-
-<style>
-
-body{
-font-family:Arial;
-background:#f4f6fb;
-padding:40px;
-}
-
-.container{
-max-width:900px;
-margin:auto;
-background:white;
-padding:40px;
-border-radius:10px;
-box-shadow:0 10px 30px rgba(0,0,0,0.1);
-}
-
-h1{
-text-align:center;
-margin-bottom:10px;
-}
-
-.subtitle{
-text-align:center;
-color:#777;
-margin-bottom:30px;
-}
-
-input{
-width:70%;
-padding:14px;
-font-size:16px;
-}
-
-button{
-padding:14px 22px;
-background:#4CAF50;
-color:white;
-border:none;
-font-size:16px;
-cursor:pointer;
-}
-
-button:hover{
-background:#3c8c40;
-}
-
-.results{
-margin-top:30px;
-background:#fafafa;
-padding:25px;
-border-radius:8px;
-white-space:pre-wrap;
-}
-
-.copy{
-background:#2196F3;
-margin-top:10px;
-}
-
-.footer{
-margin-top:40px;
-text-align:center;
-color:#aaa;
-font-size:14px;
-}
-
-</style>
-
-<script>
-
-function copyText(){
-
-const text = document.getElementById("content").innerText
-
-navigator.clipboard.writeText(text)
-
-alert("Content copied!")
-
-}
-
-</script>
-
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ClipToContent</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #f4f6fb;
+      color: #111827;
+    }
+    .wrap {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 48px 24px;
+    }
+    .card {
+      background: white;
+      border-radius: 16px;
+      padding: 32px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+    }
+    h1 {
+      margin: 0 0 8px 0;
+      font-size: 42px;
+    }
+    .subtitle {
+      color: #6b7280;
+      margin-bottom: 28px;
+      font-size: 18px;
+    }
+    form {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 24px;
+    }
+    input[type="text"] {
+      flex: 1;
+      min-width: 280px;
+      padding: 14px 16px;
+      border: 1px solid #d1d5db;
+      border-radius: 10px;
+      font-size: 16px;
+    }
+    button {
+      padding: 14px 20px;
+      border: none;
+      border-radius: 10px;
+      background: #22c55e;
+      color: white;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #16a34a;
+    }
+    .error {
+      background: #fef2f2;
+      color: #991b1b;
+      border: 1px solid #fecaca;
+      padding: 14px 16px;
+      border-radius: 10px;
+      margin-top: 16px;
+      white-space: pre-wrap;
+    }
+    .results {
+      margin-top: 24px;
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .results pre {
+      white-space: pre-wrap;
+      font-family: Arial, sans-serif;
+      line-height: 1.5;
+      margin: 0;
+    }
+    .copy-btn {
+      margin-top: 14px;
+      background: #2563eb;
+    }
+    .copy-btn:hover {
+      background: #1d4ed8;
+    }
+    .small {
+      color: #6b7280;
+      font-size: 14px;
+      margin-top: 24px;
+    }
+  </style>
+  <script>
+    function copyResults() {
+      const text = document.getElementById("results-text").innerText;
+      navigator.clipboard.writeText(text);
+      alert("Copied");
+    }
+  </script>
 </head>
-
 <body>
+  <div class="wrap">
+    <div class="card">
+      <h1>ClipToContent</h1>
+      <div class="subtitle">Turn 1 YouTube video into hooks, posts, threads, summaries, and a content plan.</div>
 
-<div class="container">
+      <form method="POST" action="/generate">
+        <input
+          type="text"
+          name="youtube_url"
+          placeholder="Paste YouTube link here"
+          value="{{ youtube_url or '' }}"
+          required
+        />
+        <button type="submit">Generate</button>
+      </form>
 
-<h1>ContentForge AI</h1>
+      {% if error %}
+        <div class="error">{{ error }}</div>
+      {% endif %}
 
-<p class="subtitle">
-Turn any YouTube video into social media content in seconds
-</p>
+      {% if result %}
+        <div class="results">
+          <h2>Content Pack</h2>
+          <pre id="results-text">{{ result }}</pre>
+          <button class="copy-btn" onclick="copyResults()">Copy All</button>
+        </div>
+      {% endif %}
 
-<form method="POST" action="/generate">
-
-<input type="text" name="youtube_url" placeholder="Paste YouTube link here">
-
-<button type="submit">Generate Content</button>
-
-</form>
-
-{% if result %}
-
-<div class="results">
-
-<h2>Your Content Pack</h2>
-
-<div id="content">{{result}}</div>
-
-<button class="copy" onclick="copyText()">Copy All</button>
-
-</div>
-
-{% endif %}
-
-<div class="footer">
-
-AI Content Generator • Built with OpenAI
-
-</div>
-
-</div>
-
+      <div class="small">
+        Best with public YouTube videos that have captions available.
+      </div>
+    </div>
+  </div>
 </body>
-
 </html>
 """
 
 
-@app.route("/", methods=["GET"])
-def home():
-    return render_template_string(HTML)
-
-
-def get_transcript(url):
-
-    command = [
-        "yt-dlp",
-        "--skip-download",
-        "--write-auto-sub",
-        "--sub-lang",
-        "en",
-        "--sub-format",
-        "vtt",
-        url
+def get_video_id(url: str) -> str:
+    patterns = [
+        r"(?:v=)([A-Za-z0-9_-]{11})",
+        r"(?:youtu\.be/)([A-Za-z0-9_-]{11})",
+        r"(?:embed/)([A-Za-z0-9_-]{11})",
+        r"(?:shorts/)([A-Za-z0-9_-]{11})",
     ]
 
-    subprocess.run(command)
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
 
-    for file in os.listdir():
+    raise ValueError("Invalid YouTube URL")
 
-        if file.endswith(".vtt"):
 
-            with open(file, "r") as f:
+def fetch_transcript_text(video_id: str) -> str:
+    try:
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
 
-                data = f.read()
+        # Try English manual transcript first
+        try:
+            transcript = transcript_list.find_transcript(["en"])
+            return " ".join(chunk["text"] for chunk in transcript.fetch())
+        except Exception:
+            pass
 
-            os.remove(file)
+        # Then try generated English transcript
+        try:
+            transcript = transcript_list.find_generated_transcript(["en"])
+            return " ".join(chunk["text"] for chunk in transcript.fetch())
+        except Exception:
+            pass
 
-            return data
+        # Then try any transcript and translate if possible
+        for transcript in transcript_list:
+            try:
+                if transcript.language_code == "en":
+                    return " ".join(chunk["text"] for chunk in transcript.fetch())
+                translated = transcript.translate("en")
+                return " ".join(chunk["text"] for chunk in translated.fetch())
+            except Exception:
+                continue
 
-    return None
+        raise NoTranscriptFound(video_id, [], None)
+
+    except (TranscriptsDisabled, NoTranscriptFound, VideoUnavailable) as e:
+        raise e
+    except Exception as e:
+        raise RuntimeError(f"Transcript fetch failed: {str(e)}") from e
+
+
+@app.route("/", methods=["GET"])
+def home():
+    return render_template_string(HTML, result=None, error=None, youtube_url="")
 
 
 @app.route("/generate", methods=["POST"])
 def generate():
+    youtube_url = request.form.get("youtube_url", "").strip()
 
-    youtube_url = request.form["youtube_url"]
+    try:
+        video_id = get_video_id(youtube_url)
+        transcript_text = fetch_transcript_text(video_id)
 
-    transcript = get_transcript(youtube_url)
+        if not transcript_text or len(transcript_text.strip()) < 50:
+            raise RuntimeError("Transcript was too short or unavailable.")
 
-    if not transcript:
-        return "Could not fetch transcript"
+        prompt = f"""
+You are an expert content repurposing assistant for YouTube creators.
 
-    prompt = f"""
+Based on the transcript below, create a high-quality content pack with these clearly labeled sections:
 
-Create a complete content pack from this YouTube transcript.
+1. SHORT SUMMARY
+2. 10 VIRAL HOOK IDEAS
+3. LINKEDIN POST
+4. X/TWITTER THREAD (5 tweets)
+5. KEY BULLET POINTS
+6. YOUTUBE DESCRIPTION
+7. BLOG POST OUTLINE
+8. 7-DAY CONTENT DISTRIBUTION PLAN
 
-Include:
-
-1. Short Summary
-2. LinkedIn Post
-3. Twitter/X Thread
-4. Key Bullet Points
-5. YouTube Description
-6. 10 Viral Hooks
-7. Blog Post Outline
+Write in a practical, creator-focused style.
+Make the output polished and ready to use.
 
 Transcript:
-{transcript[:8000]}
-
+{transcript_text[:12000]}
 """
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role":"user","content":prompt}]
-    )
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+        )
 
-    result = response.choices[0].message.content
+        result = response.choices[0].message.content.strip()
 
-    return render_template_string(HTML, result=result)
+        return render_template_string(
+            HTML,
+            result=result,
+            error=None,
+            youtube_url=youtube_url,
+        )
+
+    except ValueError:
+        return render_template_string(
+            HTML,
+            result=None,
+            error="Invalid YouTube URL. Paste a full YouTube link.",
+            youtube_url=youtube_url,
+        )
+    except TranscriptsDisabled:
+        return render_template_string(
+            HTML,
+            result=None,
+            error="Transcripts are disabled for this video.",
+            youtube_url=youtube_url,
+        )
+    except NoTranscriptFound:
+        return render_template_string(
+            HTML,
+            result=None,
+            error="No transcript was found for this video.",
+            youtube_url=youtube_url,
+        )
+    except VideoUnavailable:
+        return render_template_string(
+            HTML,
+            result=None,
+            error="This video is unavailable.",
+            youtube_url=youtube_url,
+        )
+    except Exception as e:
+        return render_template_string(
+            HTML,
+            result=None,
+            error=f"Error: {str(e)}",
+            youtube_url=youtube_url,
+        )
 
 
 if __name__ == "__main__":
