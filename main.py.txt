@@ -1,0 +1,224 @@
+import os
+import subprocess
+from flask import Flask, request, render_template_string
+from openai import OpenAI
+
+app = Flask(__name__)
+
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+HTML = """
+<!DOCTYPE html>
+<html>
+
+<head>
+
+<title>ContentForge AI</title>
+
+<style>
+
+body{
+font-family:Arial;
+background:#f4f6fb;
+padding:40px;
+}
+
+.container{
+max-width:900px;
+margin:auto;
+background:white;
+padding:40px;
+border-radius:10px;
+box-shadow:0 10px 30px rgba(0,0,0,0.1);
+}
+
+h1{
+text-align:center;
+margin-bottom:10px;
+}
+
+.subtitle{
+text-align:center;
+color:#777;
+margin-bottom:30px;
+}
+
+input{
+width:70%;
+padding:14px;
+font-size:16px;
+}
+
+button{
+padding:14px 22px;
+background:#4CAF50;
+color:white;
+border:none;
+font-size:16px;
+cursor:pointer;
+}
+
+button:hover{
+background:#3c8c40;
+}
+
+.results{
+margin-top:30px;
+background:#fafafa;
+padding:25px;
+border-radius:8px;
+white-space:pre-wrap;
+}
+
+.copy{
+background:#2196F3;
+margin-top:10px;
+}
+
+.footer{
+margin-top:40px;
+text-align:center;
+color:#aaa;
+font-size:14px;
+}
+
+</style>
+
+<script>
+
+function copyText(){
+
+const text = document.getElementById("content").innerText
+
+navigator.clipboard.writeText(text)
+
+alert("Content copied!")
+
+}
+
+</script>
+
+</head>
+
+<body>
+
+<div class="container">
+
+<h1>ContentForge AI</h1>
+
+<p class="subtitle">
+Turn any YouTube video into social media content in seconds
+</p>
+
+<form method="POST" action="/generate">
+
+<input type="text" name="youtube_url" placeholder="Paste YouTube link here">
+
+<button type="submit">Generate Content</button>
+
+</form>
+
+{% if result %}
+
+<div class="results">
+
+<h2>Your Content Pack</h2>
+
+<div id="content">{{result}}</div>
+
+<button class="copy" onclick="copyText()">Copy All</button>
+
+</div>
+
+{% endif %}
+
+<div class="footer">
+
+AI Content Generator • Built with OpenAI
+
+</div>
+
+</div>
+
+</body>
+
+</html>
+"""
+
+
+@app.route("/", methods=["GET"])
+def home():
+    return render_template_string(HTML)
+
+
+def get_transcript(url):
+
+    command = [
+        "yt-dlp",
+        "--skip-download",
+        "--write-auto-sub",
+        "--sub-lang",
+        "en",
+        "--sub-format",
+        "vtt",
+        url
+    ]
+
+    subprocess.run(command)
+
+    for file in os.listdir():
+
+        if file.endswith(".vtt"):
+
+            with open(file, "r") as f:
+
+                data = f.read()
+
+            os.remove(file)
+
+            return data
+
+    return None
+
+
+@app.route("/generate", methods=["POST"])
+def generate():
+
+    youtube_url = request.form["youtube_url"]
+
+    transcript = get_transcript(youtube_url)
+
+    if not transcript:
+        return "Could not fetch transcript"
+
+    prompt = f"""
+
+Create a complete content pack from this YouTube transcript.
+
+Include:
+
+1. Short Summary
+2. LinkedIn Post
+3. Twitter/X Thread
+4. Key Bullet Points
+5. YouTube Description
+6. 10 Viral Hooks
+7. Blog Post Outline
+
+Transcript:
+{transcript[:8000]}
+
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role":"user","content":prompt}]
+    )
+
+    result = response.choices[0].message.content
+
+    return render_template_string(HTML, result=result)
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT",3000)))
