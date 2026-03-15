@@ -7,6 +7,8 @@ from youtube_transcript_api._errors import (
     TranscriptsDisabled,
     NoTranscriptFound,
     VideoUnavailable,
+    RequestBlocked,
+    IpBlocked,
 )
 
 app = Flask(__name__)
@@ -18,14 +20,16 @@ HTML = """
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ClipToContent</title>
 <style>
 body{font-family:Arial;background:#f4f6fb;padding:40px}
 .box{max-width:900px;margin:auto;background:white;padding:30px;border-radius:12px}
 input{width:75%;padding:12px;font-size:16px}
-button{padding:12px 20px;background:#22c55e;border:none;color:white;font-weight:bold;border-radius:8px}
+button{padding:12px 20px;background:#22c55e;border:none;color:white;font-weight:bold;border-radius:8px;cursor:pointer}
 .error{background:#fee2e2;color:#991b1b;padding:10px;border-radius:8px;margin-top:15px}
 .result{background:#f1f5f9;padding:20px;margin-top:20px;border-radius:10px}
+pre{white-space:pre-wrap;font-family:Arial,sans-serif}
 </style>
 </head>
 <body>
@@ -34,17 +38,18 @@ button{padding:12px 20px;background:#22c55e;border:none;color:white;font-weight:
 <p>Turn 1 YouTube video into hooks, posts, threads, summaries and a content plan.</p>
 
 <form method="POST" action="/generate">
-<input type="text" name="youtube_url" placeholder="Paste YouTube link here" required>
+<input type="text" name="youtube_url" placeholder="Paste YouTube link here" value="{{ youtube_url or '' }}" required>
 <button type="submit">Generate</button>
 </form>
 
 {% if error %}
-<div class="error">{{error}}</div>
+<div class="error">{{ error }}</div>
 {% endif %}
 
 {% if result %}
 <div class="result">
-<pre>{{result}}</pre>
+<h2>Content Pack</h2>
+<pre>{{ result }}</pre>
 </div>
 {% endif %}
 
@@ -54,48 +59,89 @@ button{padding:12px 20px;background:#22c55e;border:none;color:white;font-weight:
 """
 
 
-def get_video_id(url):
-    pattern = r"(?:v=|youtu\.be/)([A-Za-z0-9_-]{11})"
-    match = re.search(pattern, url)
-    if match:
-        return match.group(1)
+def get_video_id(url: str) -> str:
+    patterns = [
+        r"(?:v=)([A-Za-z0-9_-]{11})",
+        r"(?:youtu\.be/)([A-Za-z0-9_-]{11})",
+        r"(?:embed/)([A-Za-z0-9_-]{11})",
+        r"(?:shorts/)([A-Za-z0-9_-]{11})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
     raise ValueError("Invalid YouTube URL")
 
 
-def fetch_transcript(video_id):
-    transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=["en"])
-    text = " ".join(chunk["text"] for chunk in transcript)
-    return text
+def fetch_transcript(video_id: str) -> str:
+    ytt = YouTubeTranscriptApi()
+
+    try:
+        fetched = ytt.fetch(video_id, languages=["en"])
+        return " ".join(snippet.text for snippet in fetched)
+    except NoTranscriptFound:
+        pass
+
+    transcript_list = ytt.list(video_id)
+
+    try:
+        transcript = transcript_list.find_transcript(["en"])
+        fetched = transcript.fetch()
+        return " ".join(snippet.text for snippet in fetched)
+    except NoTranscriptFound:
+        pass
+
+    try:
+        transcript = transcript_list.find_generated_transcript(["en"])
+        fetched = transcript.fetch()
+        return " ".join(snippet.text for snippet in fetched)
+    except NoTranscriptFound:
+        pass
+
+    for transcript in transcript_list:
+        try:
+            if transcript.language_code == "en":
+                fetched = transcript.fetch()
+                return " ".join(snippet.text for snippet in fetched)
+
+            if transcript.is_translatable:
+                fetched = transcript.translate("en").fetch()
+                return " ".join(snippet.text for snippet in fetched)
+        except Exception:
+            continue
+
+    raise NoTranscriptFound(video_id, [], None)
 
 
 @app.route("/", methods=["GET"])
 def home():
-    return render_template_string(HTML)
+    return render_template_string(HTML, result=None, error=None, youtube_url="")
 
 
 @app.route("/generate", methods=["POST"])
 def generate():
-
-    url = request.form.get("youtube_url")
+    youtube_url = request.form.get("youtube_url", "").strip()
 
     try:
-        video_id = get_video_id(url)
-
+        video_id = get_video_id(youtube_url)
         transcript = fetch_transcript(video_id)
+
+        if not transcript or len(transcript.strip()) < 50:
+            raise RuntimeError("Transcript was too short or unavailable.")
 
         prompt = f"""
 You are a YouTube content repurposing expert.
 
 Based on this transcript generate:
 
-1. Short summary
-2. 10 viral hooks
-3. LinkedIn post
-4. Twitter thread
-5. Key bullet points
-6. YouTube description
-7. Blog outline
-8. 7 day content distribution plan
+1. Short Summary
+2. 10 Viral Hooks
+3. LinkedIn Post
+4. Twitter/X Thread
+5. Key Bullet Points
+6. YouTube Description
+7. Blog Outline
+8. 7 Day Content Distribution Plan
 
 Transcript:
 {transcript[:12000]}
@@ -108,19 +154,60 @@ Transcript:
 
         result = response.choices[0].message.content
 
-        return render_template_string(HTML, result=result)
+        return render_template_string(
+            HTML,
+            result=result,
+            error=None,
+            youtube_url=youtube_url,
+        )
+
+    except ValueError:
+        return render_template_string(
+            HTML,
+            result=None,
+            error="Invalid YouTube URL. Paste a full YouTube link.",
+            youtube_url=youtube_url,
+        )
 
     except TranscriptsDisabled:
-        return render_template_string(HTML, error="Transcripts are disabled for this video.")
+        return render_template_string(
+            HTML,
+            result=None,
+            error="Transcripts are disabled for this video.",
+            youtube_url=youtube_url,
+        )
 
     except NoTranscriptFound:
-        return render_template_string(HTML, error="No transcript available for this video.")
+        return render_template_string(
+            HTML,
+            result=None,
+            error="No transcript was found for this video.",
+            youtube_url=youtube_url,
+        )
 
     except VideoUnavailable:
-        return render_template_string(HTML, error="Video unavailable.")
+        return render_template_string(
+            HTML,
+            result=None,
+            error="This video is unavailable.",
+            youtube_url=youtube_url,
+        )
+
+    except (RequestBlocked, IpBlocked):
+        return render_template_string(
+            HTML,
+            result=None,
+            error="YouTube blocked transcript access from the server IP. This is a deployment/network issue, not your link.",
+            youtube_url=youtube_url,
+        )
 
     except Exception as e:
-        return render_template_string(HTML, error=str(e))
+        return render_template_string(
+            HTML,
+            result=None,
+            error=f"Error: {str(e)}",
+            youtube_url=youtube_url,
+        )
 
 
 if __name__ == "__main__":
