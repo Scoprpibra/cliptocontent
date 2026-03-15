@@ -3,6 +3,7 @@ import re
 from flask import Flask, request, render_template_string
 from openai import OpenAI
 from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api.proxies import GenericProxyConfig
 from youtube_transcript_api._errors import (
     TranscriptsDisabled,
     NoTranscriptFound,
@@ -73,44 +74,35 @@ def get_video_id(url: str) -> str:
     raise ValueError("Invalid YouTube URL")
 
 
+def build_transcript_client() -> YouTubeTranscriptApi:
+    proxy_host = os.environ.get("PROXY_HOST")
+    proxy_port = os.environ.get("PROXY_PORT")
+    proxy_user = os.environ.get("PROXY_USERNAME")
+    proxy_pass = os.environ.get("PROXY_PASSWORD")
+
+    if proxy_host and proxy_port and proxy_user and proxy_pass:
+        proxy_url = f"http://{proxy_user}:{proxy_pass}@{proxy_host}:{proxy_port}"
+        proxy_config = GenericProxyConfig(
+            http_url=proxy_url,
+            https_url=proxy_url,
+        )
+        return YouTubeTranscriptApi(proxy_config=proxy_config)
+
+    return YouTubeTranscriptApi()
+
+
 def fetch_transcript(video_id: str) -> str:
-    ytt = YouTubeTranscriptApi()
+    api = build_transcript_client()
 
     try:
-        fetched = ytt.fetch(video_id, languages=["en"])
+        fetched = api.fetch(video_id, languages=["en"])
         return " ".join(snippet.text for snippet in fetched)
     except NoTranscriptFound:
-        pass
-
-    transcript_list = ytt.list(video_id)
-
-    try:
-        transcript = transcript_list.find_transcript(["en"])
-        fetched = transcript.fetch()
-        return " ".join(snippet.text for snippet in fetched)
-    except NoTranscriptFound:
-        pass
-
-    try:
-        transcript = transcript_list.find_generated_transcript(["en"])
-        fetched = transcript.fetch()
-        return " ".join(snippet.text for snippet in fetched)
-    except NoTranscriptFound:
-        pass
-
-    for transcript in transcript_list:
-        try:
-            if transcript.language_code == "en":
-                fetched = transcript.fetch()
-                return " ".join(snippet.text for snippet in fetched)
-
-            if transcript.is_translatable:
-                fetched = transcript.translate("en").fetch()
-                return " ".join(snippet.text for snippet in fetched)
-        except Exception:
-            continue
-
-    raise NoTranscriptFound(video_id, [], None)
+        raise
+    except (TranscriptsDisabled, VideoUnavailable, RequestBlocked, IpBlocked):
+        raise
+    except Exception as e:
+        raise RuntimeError(f"Transcript fetch failed: {str(e)}") from e
 
 
 @app.route("/", methods=["GET"])
@@ -197,7 +189,7 @@ Transcript:
         return render_template_string(
             HTML,
             result=None,
-            error="YouTube blocked transcript access from the server IP. This is a deployment/network issue, not your link.",
+            error="YouTube blocked transcript access from the server. Check your proxy settings.",
             youtube_url=youtube_url,
         )
 
