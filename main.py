@@ -1,5 +1,6 @@
 import os
 import re
+import time
 from flask import Flask, request, render_template_string
 from openai import OpenAI
 from youtube_transcript_api import YouTubeTranscriptApi
@@ -91,18 +92,35 @@ def build_transcript_client() -> YouTubeTranscriptApi:
     return YouTubeTranscriptApi()
 
 
-def fetch_transcript(video_id: str) -> str:
+def fetch_transcript_once(video_id: str) -> str:
     api = build_transcript_client()
+    fetched = api.fetch(video_id, languages=["en"])
+    return " ".join(snippet.text for snippet in fetched)
 
-    try:
-        fetched = api.fetch(video_id, languages=["en"])
-        return " ".join(snippet.text for snippet in fetched)
-    except NoTranscriptFound:
-        raise
-    except (TranscriptsDisabled, VideoUnavailable, RequestBlocked, IpBlocked):
-        raise
-    except Exception as e:
-        raise RuntimeError(f"Transcript fetch failed: {str(e)}") from e
+
+def fetch_transcript(video_id: str) -> str:
+    last_error = None
+
+    for attempt in range(3):
+        try:
+            return fetch_transcript_once(video_id)
+
+        except (TranscriptsDisabled, NoTranscriptFound, VideoUnavailable):
+            raise
+
+        except (RequestBlocked, IpBlocked) as e:
+            last_error = e
+
+        except Exception as e:
+            last_error = e
+
+        if attempt < 2:
+            time.sleep(1.5)
+
+    if isinstance(last_error, (RequestBlocked, IpBlocked)):
+        raise last_error
+
+    raise RuntimeError(f"Transcript fetch failed: {str(last_error)}")
 
 
 @app.route("/", methods=["GET"])
@@ -205,4 +223,3 @@ Transcript:
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
-
