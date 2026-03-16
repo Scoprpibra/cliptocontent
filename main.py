@@ -189,15 +189,15 @@ Transcript:
         return render_template_string(
             HTML,
             result=None,
-            error="YouTube blocked transcript access from the server. Check your proxy settings.",
+            error="We couldn’t retrieve captions for this video right now. Please try another video.",
             youtube_url=youtube_url,
         )
 
-    except Exception as e:
+    except Exception:
         return render_template_string(
             HTML,
             result=None,
-            error=f"Error: {str(e)}",
+            error="We couldn’t retrieve captions for this video right now. Please try another video.",
             youtube_url=youtube_url,
         )
 
@@ -205,3 +205,4 @@ Transcript:
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
