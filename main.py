@@ -115,16 +115,31 @@ def generate():
         prompt = f"""
 You are a YouTube content repurposing expert.
 
-Based on this transcript generate:
+You are an expert YouTube growth strategist.
 
-1. Short Summary
-2. 10 Viral Hooks
-3. LinkedIn Post
-4. Twitter/X Thread
-5. Key Bullet Points
-6. YouTube Description
-7. Blog Outline
-8. 7 Day Content Distribution Plan
+Analyze the transcript below and generate a Creator Growth Pack.
+
+The goal is to help a business YouTuber turn one long video into many pieces of high-performing content.
+
+Generate exactly the following:
+
+10 VIRAL HOOKS  
+Short opening lines designed to capture attention in the first 3 seconds of a video.
+
+10 SHORT-FORM VIDEO IDEAS  
+Ideas for TikTok / YouTube Shorts / Reels extracted from the main video.
+
+5 YOUTUBE TITLES  
+High click-through rate titles optimized for YouTube.
+
+3 TWITTER THREAD IDEAS  
+Each thread should contain 4–5 tweets summarizing useful ideas.
+
+2 LINKEDIN POSTS  
+Professional style posts suitable for business creators.
+
+Write clearly and avoid generic advice.  
+Focus on strong angles, curiosity, and shareable ideas.
 
 Transcript:
 {transcript[:4000]}
