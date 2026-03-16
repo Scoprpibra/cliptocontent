@@ -1,16 +1,9 @@
 import os
 import re
+import tempfile
+import subprocess
 from flask import Flask, request, render_template_string
 from openai import OpenAI
-from youtube_transcript_api import YouTubeTranscriptApi
-from youtube_transcript_api.proxies import GenericProxyConfig
-from youtube_transcript_api._errors import (
-    TranscriptsDisabled,
-    NoTranscriptFound,
-    VideoUnavailable,
-    RequestBlocked,
-    IpBlocked,
-)
 
 app = Flask(__name__)
 
@@ -59,11 +52,10 @@ pre{white-space:pre-wrap;font-family:Arial,sans-serif}
 </html>
 """
 
-
 def get_video_id(url: str) -> str:
     patterns = [
         r"(?:v=)([A-Za-z0-9_-]{11})",
-        r"(?:youtu\.be/)([A-Za-z0-9_-]{11})",
+        r"(?:youtu\\.be/)([A-Za-z0-9_-]{11})",
         r"(?:embed/)([A-Za-z0-9_-]{11})",
         r"(?:shorts/)([A-Za-z0-9_-]{11})",
     ]
@@ -73,60 +65,50 @@ def get_video_id(url: str) -> str:
             return match.group(1)
     raise ValueError("Invalid YouTube URL")
 
+def download_audio(youtube_url: str) -> str:
+    temp_dir = tempfile.mkdtemp()
+    output_template = os.path.join(temp_dir, "%(id)s.%(ext)s")
 
-def build_proxy_client() -> YouTubeTranscriptApi:
-    proxy_host = os.environ.get("PROXY_HOST")
-    proxy_port = os.environ.get("PROXY_PORT")
-    proxy_user = os.environ.get("PROXY_USERNAME")
-    proxy_pass = os.environ.get("PROXY_PASSWORD")
+    command = [
+        "yt-dlp",
+        "-f", "bestaudio/best",
+        "-x",
+        "--audio-format", "mp3",
+        "-o", output_template,
+        youtube_url,
+    ]
 
-    if not all([proxy_host, proxy_port, proxy_user, proxy_pass]):
-        raise RuntimeError("Proxy environment variables are missing.")
+    result = subprocess.run(command, capture_output=True, text=True)
 
-    proxy_url = f"http://{proxy_user}:{proxy_pass}@{proxy_host}:{proxy_port}"
+    if result.returncode != 0:
+        raise RuntimeError("Could not download audio from this video.")
 
-    proxy_config = GenericProxyConfig(
-        http_url=proxy_url,
-        https_url=proxy_url,
-    )
+    for filename in os.listdir(temp_dir):
+        if filename.endswith(".mp3"):
+            return os.path.join(temp_dir, filename)
 
-    return YouTubeTranscriptApi(proxy_config=proxy_config)
+    raise RuntimeError("Audio file was not created.")
 
-
-def fetch_transcript(video_id: str) -> str:
-    last_error = None
-
-    # First try direct access
-    try:
-        api = YouTubeTranscriptApi()
-        fetched = api.fetch(video_id, languages=["en"])
-        return " ".join([snippet.text for snippet in fetched])
-    except Exception as e:
-        last_error = e
-
-    # Then try proxy fallback
-    try:
-        api = build_proxy_client()
-        fetched = api.fetch(video_id, languages=["en"])
-        return " ".join([snippet.text for snippet in fetched])
-    except Exception as e:
-        last_error = e
-
-    raise RuntimeError(str(last_error))
-
+def transcribe_audio(audio_path: str) -> str:
+    with open(audio_path, "rb") as audio_file:
+        transcript = client.audio.transcriptions.create(
+            model="gpt-4o-mini-transcribe",
+            file=audio_file,
+        )
+    return transcript.text
 
 @app.route("/", methods=["GET"])
 def home():
     return render_template_string(HTML, result=None, error=None, youtube_url="")
-
 
 @app.route("/generate", methods=["POST"])
 def generate():
     youtube_url = request.form.get("youtube_url", "").strip()
 
     try:
-        video_id = get_video_id(youtube_url)
-        transcript = fetch_transcript(video_id)
+        get_video_id(youtube_url)
+        audio_path = download_audio(youtube_url)
+        transcript = transcribe_audio(audio_path)
 
         if not transcript or len(transcript.strip()) < 50:
             raise RuntimeError("Transcript was too short or unavailable.")
@@ -171,46 +153,13 @@ Transcript:
             youtube_url=youtube_url,
         )
 
-    except TranscriptsDisabled:
-        return render_template_string(
-            HTML,
-            result=None,
-            error="Transcripts are disabled for this video.",
-            youtube_url=youtube_url,
-        )
-
-    except NoTranscriptFound:
-        return render_template_string(
-            HTML,
-            result=None,
-            error="No transcript was found for this video.",
-            youtube_url=youtube_url,
-        )
-
-    except VideoUnavailable:
-        return render_template_string(
-            HTML,
-            result=None,
-            error="This video is unavailable.",
-            youtube_url=youtube_url,
-        )
-
-    except (RequestBlocked, IpBlocked):
-        return render_template_string(
-            HTML,
-            result=None,
-            error="We couldn’t retrieve captions for this video right now. Please try another video.",
-            youtube_url=youtube_url,
-        )
-
     except Exception:
         return render_template_string(
             HTML,
             result=None,
-            error="We couldn’t retrieve captions for this video right now. Please try another video.",
+            error="We couldn’t process this video right now. Please try another video.",
             youtube_url=youtube_url,
         )
-
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
