@@ -55,7 +55,7 @@ pre{white-space:pre-wrap;font-family:Arial,sans-serif}
 def get_video_id(url: str) -> str:
     patterns = [
         r"(?:v=)([A-Za-z0-9_-]{11})",
-        r"(?:youtu\\.be/)([A-Za-z0-9_-]{11})",
+        r"(?:youtu\.be/)([A-Za-z0-9_-]{11})",
         r"(?:embed/)([A-Za-z0-9_-]{11})",
         r"(?:shorts/)([A-Za-z0-9_-]{11})",
     ]
@@ -71,9 +71,8 @@ def download_audio(youtube_url: str) -> str:
 
     command = [
         "yt-dlp",
-        "-f", "bestaudio/best",
-        "-x",
-        "--audio-format", "mp3",
+        "-f", "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio",
+        "--no-playlist",
         "-o", output_template,
         youtube_url,
     ]
@@ -81,10 +80,10 @@ def download_audio(youtube_url: str) -> str:
     result = subprocess.run(command, capture_output=True, text=True)
 
     if result.returncode != 0:
-        raise RuntimeError("Could not download audio from this video.")
+        raise RuntimeError(f"Audio download failed: {result.stderr.strip() or result.stdout.strip() or 'Unknown yt-dlp error'}")
 
     for filename in os.listdir(temp_dir):
-        if filename.endswith(".mp3"):
+        if filename.endswith((".m4a", ".webm", ".mp4", ".mp3", ".wav", ".mpeg", ".mpga", ".ogg", ".flac")):
             return os.path.join(temp_dir, filename)
 
     raise RuntimeError("Audio file was not created.")
