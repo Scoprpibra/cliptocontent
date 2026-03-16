@@ -153,11 +153,11 @@ Transcript:
             youtube_url=youtube_url,
         )
 
-    except Exception:
+    except Exception as e:
         return render_template_string(
             HTML,
             result=None,
-            error="We couldn’t process this video right now. Please try another video.",
+            error=f"DEBUG ERROR: {str(e)}",
             youtube_url=youtube_url,
         )
 
