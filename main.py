@@ -1,6 +1,5 @@
 import os
 import re
-import time
 from flask import Flask, request, render_template_string
 from openai import OpenAI
 from youtube_transcript_api import YouTubeTranscriptApi
@@ -75,52 +74,45 @@ def get_video_id(url: str) -> str:
     raise ValueError("Invalid YouTube URL")
 
 
-def build_transcript_client() -> YouTubeTranscriptApi:
+def build_proxy_client() -> YouTubeTranscriptApi:
     proxy_host = os.environ.get("PROXY_HOST")
     proxy_port = os.environ.get("PROXY_PORT")
     proxy_user = os.environ.get("PROXY_USERNAME")
     proxy_pass = os.environ.get("PROXY_PASSWORD")
 
-    if proxy_host and proxy_port and proxy_user and proxy_pass:
-        proxy_url = f"http://{proxy_user}:{proxy_pass}@{proxy_host}:{proxy_port}"
-        proxy_config = GenericProxyConfig(
-            http_url=proxy_url,
-            https_url=proxy_url,
-        )
-        return YouTubeTranscriptApi(proxy_config=proxy_config)
+    if not all([proxy_host, proxy_port, proxy_user, proxy_pass]):
+        raise RuntimeError("Proxy environment variables are missing.")
 
-    return YouTubeTranscriptApi()
+    proxy_url = f"http://{proxy_user}:{proxy_pass}@{proxy_host}:{proxy_port}"
 
+    proxy_config = GenericProxyConfig(
+        http_url=proxy_url,
+        https_url=proxy_url,
+    )
 
-def fetch_transcript_once(video_id: str) -> str:
-    api = build_transcript_client()
-    fetched = api.fetch(video_id, languages=["en"])
-    return " ".join(snippet.text for snippet in fetched)
+    return YouTubeTranscriptApi(proxy_config=proxy_config)
 
 
 def fetch_transcript(video_id: str) -> str:
     last_error = None
 
-    for attempt in range(3):
-        try:
-            return fetch_transcript_once(video_id)
+    # First try direct access
+    try:
+        api = YouTubeTranscriptApi()
+        fetched = api.fetch(video_id, languages=["en"])
+        return " ".join([snippet.text for snippet in fetched])
+    except Exception as e:
+        last_error = e
 
-        except (TranscriptsDisabled, NoTranscriptFound, VideoUnavailable):
-            raise
+    # Then try proxy fallback
+    try:
+        api = build_proxy_client()
+        fetched = api.fetch(video_id, languages=["en"])
+        return " ".join([snippet.text for snippet in fetched])
+    except Exception as e:
+        last_error = e
 
-        except (RequestBlocked, IpBlocked) as e:
-            last_error = e
-
-        except Exception as e:
-            last_error = e
-
-        if attempt < 2:
-            time.sleep(1.5)
-
-    if isinstance(last_error, (RequestBlocked, IpBlocked)):
-        raise last_error
-
-    raise RuntimeError(f"Transcript fetch failed: {str(last_error)}")
+    raise RuntimeError(str(last_error))
 
 
 @app.route("/", methods=["GET"])
